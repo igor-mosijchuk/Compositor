@@ -1,0 +1,41 @@
+name: Build DMG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-26   # образ з Xcode 26; збирає застосунок під macOS 14.0+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply macOS 14 patch
+        run: git apply compositor-macos14.patch
+
+      - name: Xcode version
+        run: xcodebuild -version
+
+      - name: Build (universal, unsigned)
+        run: |
+          xcodebuild -project Compositor.xcodeproj \
+            -scheme Compositor \
+            -configuration Release \
+            -derivedDataPath build \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Ad-hoc sign and package DMG
+        run: |
+          APP=$(find build/Build/Products/Release -maxdepth 1 -name "*.app" | head -1)
+          echo "Built: $APP"
+          codesign --force --deep --sign - "$APP"
+          mkdir dmgroot
+          cp -R "$APP" dmgroot/
+          ln -s /Applications dmgroot/Applications
+          hdiutil create -volname "Compositor" -srcfolder dmgroot -ov -format UDZO Compositor-macos14.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Compositor-dmg
+          path: Compositor-macos14.dmg

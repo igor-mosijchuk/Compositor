@@ -17,6 +17,7 @@ jobs:
 
       - name: Build (universal, unsigned)
         run: |
+          set -o pipefail
           xcodebuild -project Compositor.xcodeproj \
             -scheme Compositor \
             -configuration Release \
@@ -24,7 +25,19 @@ jobs:
             ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
             MACOSX_DEPLOYMENT_TARGET=14.0 \
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
-            build
+            build 2>&1 | tee build.log || {
+              echo "=== ERRORS ==="
+              grep -E "error:" build.log | sed 's#/Users/runner/work/Compositor/Compositor/##' | sort -u | head -30 | tee errors.txt
+              while IFS= read -r line; do echo "::error::$line"; done < errors.txt
+              exit 1
+            }
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Ad-hoc sign and package DMG
         run: |

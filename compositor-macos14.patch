@@ -1,43 +1,3 @@
-diff --git a/Compositor.xcodeproj/project.pbxproj b/Compositor.xcodeproj/project.pbxproj
-index 93c4e8e..dd9b4fe 100644
---- a/Compositor.xcodeproj/project.pbxproj
-+++ b/Compositor.xcodeproj/project.pbxproj
-@@ -332,7 +332,7 @@
- 				GCC_WARN_UNUSED_FUNCTION = YES;
- 				GCC_WARN_UNUSED_VARIABLE = YES;
- 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
--				MACOSX_DEPLOYMENT_TARGET = 26.5;
-+				MACOSX_DEPLOYMENT_TARGET = 14.0;
- 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
- 				MTL_FAST_MATH = YES;
- 				ONLY_ACTIVE_ARCH = YES;
-@@ -390,7 +390,7 @@
- 				GCC_WARN_UNUSED_FUNCTION = YES;
- 				GCC_WARN_UNUSED_VARIABLE = YES;
- 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
--				MACOSX_DEPLOYMENT_TARGET = 26.5;
-+				MACOSX_DEPLOYMENT_TARGET = 14.0;
- 				MTL_ENABLE_DEBUG_INFO = NO;
- 				MTL_FAST_MATH = YES;
- 				SDKROOT = macosx;
-@@ -481,7 +481,7 @@
- 				CURRENT_PROJECT_VERSION = 23;
- 				DEVELOPMENT_TEAM = 3E4X3B9Z9T;
- 				GENERATE_INFOPLIST_FILE = YES;
--				MACOSX_DEPLOYMENT_TARGET = 26.5;
-+				MACOSX_DEPLOYMENT_TARGET = 14.0;
- 				MARKETING_VERSION = 1.2.8;
- 				PRODUCT_BUNDLE_IDENTIFIER = com.wonderassembly.compositor.tests;
- 				PRODUCT_NAME = "$(TARGET_NAME)";
-@@ -502,7 +502,7 @@
- 				CURRENT_PROJECT_VERSION = 23;
- 				DEVELOPMENT_TEAM = 3E4X3B9Z9T;
- 				GENERATE_INFOPLIST_FILE = YES;
--				MACOSX_DEPLOYMENT_TARGET = 26.5;
-+				MACOSX_DEPLOYMENT_TARGET = 14.0;
- 				MARKETING_VERSION = 1.2.8;
- 				PRODUCT_BUNDLE_IDENTIFIER = com.wonderassembly.compositor.tests;
- 				PRODUCT_NAME = "$(TARGET_NAME)";
 diff --git a/Compositor/CompositorApp.swift b/Compositor/CompositorApp.swift
 index 03dad68..c6aeee4 100644
 --- a/Compositor/CompositorApp.swift
@@ -159,3 +119,75 @@ index 9cfba1c..94fe346 100644
 +        if #available(macOS 15, *) { pointerStyle(.columnResize) } else { self }
 +    }
 +}
+diff --git a/Compositor/Rendering/EditorCanvas.swift b/Compositor/Rendering/EditorCanvas.swift
+index b8149bf..d35557c 100644
+--- a/Compositor/Rendering/EditorCanvas.swift
++++ b/Compositor/Rendering/EditorCanvas.swift
+@@ -1131,14 +1131,27 @@ final class CanvasView: NSView {
+             : .crosshair
+         addCursorRect(bounds, cursor: cursor)
+         guard session.tool == .crop, !spaceHeld else { return }
+-        let positions: [NSCursor.FrameResizePosition] = [.topLeft, .top, .topRight, .right, .bottomRight, .bottom, .bottomLeft, .left]
+         for region in transformOverlay.cropResizeRegions.reversed() {
+             let rect = region.rect.intersection(bounds)
+             if !rect.isEmpty && !rect.isNull {
+-                addCursorRect(rect, cursor: .frameResize(position: positions[region.index], directions: [.inward, .outward]))
++                addCursorRect(rect, cursor: Self.cropResizeCursor(forRegion: region.index))
+             }
+         }
+     }
++
++    /// Diagonal frame-resize cursors exist from macOS 15; macOS 14 gets plain horizontal, vertical and crosshair ones.
++    /// Region order: top left, top, top right, right, bottom right, bottom, bottom left, left.
++    private static func cropResizeCursor(forRegion index: Int) -> NSCursor {
++        if #available(macOS 15, *) {
++            let positions: [NSCursor.FrameResizePosition] = [.topLeft, .top, .topRight, .right, .bottomRight, .bottom, .bottomLeft, .left]
++            return .frameResize(position: positions[index], directions: [.inward, .outward])
++        }
++        switch index {
++        case 1, 5: return .resizeUpDown
++        case 3, 7: return .resizeLeftRight
++        default: return .crosshair
++        }
++    }
+     override func updateTrackingAreas() {
+         super.updateTrackingAreas()
+         if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+diff --git a/Compositor/Rendering/InlineTextEditor.swift b/Compositor/Rendering/InlineTextEditor.swift
+index 98002f6..86b2279 100644
+--- a/Compositor/Rendering/InlineTextEditor.swift
++++ b/Compositor/Rendering/InlineTextEditor.swift
+@@ -257,6 +257,14 @@ final class InlineTextEditor: NSView, NSTextViewDelegate {
+ 
+     /// The arrows for the edge or corner a handle resizes, turned with the text box.
+     private func handleCursor(_ index: Int) -> NSCursor {
++        guard #available(macOS 15, *) else {
++            // Diagonal frame-resize cursors need macOS 15; macOS 14 gets plain ones.
++            switch index % 4 {
++            case 1: return .resizeUpDown
++            case 3: return .resizeLeftRight
++            default: return .crosshair
++            }
++        }
+         let positions: [NSCursor.FrameResizePosition] = [.topLeft, .top, .topRight, .right, .topLeft, .top, .topRight, .right]
+         let rotation = canvas?.session.textDraft?.transform?.rotation ?? 0
+         let turns = (Int((rotation / 45).rounded()) % 8 + 8) % 8
+diff --git a/Compositor/Rendering/TransformOverlay.swift b/Compositor/Rendering/TransformOverlay.swift
+index d352d75..34ccbc5 100644
+--- a/Compositor/Rendering/TransformOverlay.swift
++++ b/Compositor/Rendering/TransformOverlay.swift
+@@ -44,6 +44,14 @@ struct TransformOverlayGeometry: Equatable {
+         let angle = atan2(handles[2].y - handles[0].y, handles[2].x - handles[0].x)
+         let offsets: [CGFloat] = [.pi / 4, .pi / 2, 3 * .pi / 4, 0, .pi / 4, .pi / 2, 3 * .pi / 4, 0]
+         let direction = (Int(((angle + offsets[index]) / (.pi / 4)).rounded()) % 4 + 4) % 4
++        guard #available(macOS 15, *) else {
++            // Diagonal frame-resize cursors need macOS 15; macOS 14 gets plain ones.
++            switch direction {
++            case 0: return .resizeLeftRight
++            case 2: return .resizeUpDown
++            default: return .crosshair
++            }
++        }
+         let positions: [NSCursor.FrameResizePosition] = [.right, .bottomRight, .bottom, .topRight]
+         return .frameResize(position: positions[direction], directions: [.inward, .outward])
+     }

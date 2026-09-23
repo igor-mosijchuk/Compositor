@@ -1,0 +1,161 @@
+diff --git a/Compositor.xcodeproj/project.pbxproj b/Compositor.xcodeproj/project.pbxproj
+index 93c4e8e..dd9b4fe 100644
+--- a/Compositor.xcodeproj/project.pbxproj
++++ b/Compositor.xcodeproj/project.pbxproj
+@@ -332,7 +332,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+-				MACOSX_DEPLOYMENT_TARGET = 26.5;
++				MACOSX_DEPLOYMENT_TARGET = 14.0;
+ 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+ 				MTL_FAST_MATH = YES;
+ 				ONLY_ACTIVE_ARCH = YES;
+@@ -390,7 +390,7 @@
+ 				GCC_WARN_UNUSED_FUNCTION = YES;
+ 				GCC_WARN_UNUSED_VARIABLE = YES;
+ 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+-				MACOSX_DEPLOYMENT_TARGET = 26.5;
++				MACOSX_DEPLOYMENT_TARGET = 14.0;
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				MTL_FAST_MATH = YES;
+ 				SDKROOT = macosx;
+@@ -481,7 +481,7 @@
+ 				CURRENT_PROJECT_VERSION = 23;
+ 				DEVELOPMENT_TEAM = 3E4X3B9Z9T;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				MACOSX_DEPLOYMENT_TARGET = 26.5;
++				MACOSX_DEPLOYMENT_TARGET = 14.0;
+ 				MARKETING_VERSION = 1.2.8;
+ 				PRODUCT_BUNDLE_IDENTIFIER = com.wonderassembly.compositor.tests;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+@@ -502,7 +502,7 @@
+ 				CURRENT_PROJECT_VERSION = 23;
+ 				DEVELOPMENT_TEAM = 3E4X3B9Z9T;
+ 				GENERATE_INFOPLIST_FILE = YES;
+-				MACOSX_DEPLOYMENT_TARGET = 26.5;
++				MACOSX_DEPLOYMENT_TARGET = 14.0;
+ 				MARKETING_VERSION = 1.2.8;
+ 				PRODUCT_BUNDLE_IDENTIFIER = com.wonderassembly.compositor.tests;
+ 				PRODUCT_NAME = "$(TARGET_NAME)";
+diff --git a/Compositor/CompositorApp.swift b/Compositor/CompositorApp.swift
+index 03dad68..c6aeee4 100644
+--- a/Compositor/CompositorApp.swift
++++ b/Compositor/CompositorApp.swift
+@@ -15,9 +15,7 @@ struct CompositorApp: App {
+             .handlesExternalEvents(matching: [])
+             // A first launch fills the screen (without going full screen); after that macOS reopens the window at the
+             // size it was left.
+-            .defaultWindowPlacement { _, context in
+-                WindowPlacement(size: context.defaultDisplay.visibleRect.size)
+-            }
++            .fillsScreenOnFirstLaunch()
+             // The project's name is already on its tab, so the toolbar doesn't repeat it as a window title.
+             .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+             .commands {
+@@ -320,3 +318,16 @@ struct CompositorApp: App {
+             }
+     }
+ }
++
++private extension Scene {
++    /// macOS 15+: open the first window at the visible screen size. On macOS 14 the default size applies instead.
++    @SceneBuilder func fillsScreenOnFirstLaunch() -> some Scene {
++        if #available(macOS 15, *) {
++            defaultWindowPlacement { _, context in
++                WindowPlacement(size: context.defaultDisplay.visibleRect.size)
++            }
++        } else {
++            self
++        }
++    }
++}
+diff --git a/Compositor/ContentView.swift b/Compositor/ContentView.swift
+index 9cfba1c..94fe346 100644
+--- a/Compositor/ContentView.swift
++++ b/Compositor/ContentView.swift
+@@ -157,20 +157,13 @@ struct ContentView: View {
+                     .disabled(session.isImporting || session.showsBusy || session.levels != nil)
+                     .modifier(NewProjectDropTarget(workspace: applicationDelegate?.workspace))
+             }
+-            ToolbarSpacer(.fixed, placement: .navigation)
++            fixedToolbarSpacer
+             if let workspace = applicationDelegate?.workspace {
+-                ToolbarItem(placement: .navigation) {
+-                    ProjectTabStrip(workspace: workspace)
+-                        // As wide as the toolbar allows: the window less the traffic lights and New button before it
+-                        // and the zoom controls after it. Bounded, so adding tabs never pushes those aside; the
+-                        // strip scrolls instead.
+-                        .frame(width: max(200, windowWidth - 352), height: 34, alignment: .center)
+-                }
+-                .sharedBackgroundVisibility(.hidden)
++                tabStripToolbarItem(workspace)
+             }
+             // Absorb all remaining navigation-toolbar width before the zoom controls.
+             // Without this spacer, the growing tab strip pushes the primary actions left.
+-            ToolbarSpacer(.flexible, placement: .navigation)
++            flexibleToolbarSpacer
+             ToolbarItem(placement: .primaryAction) {
+                 Button("Fit") { session.fit() }.help("Fit canvas in window (⌘0)")
+                     .accessibilityIdentifier("fitCanvas").disabled(session.document == nil)
+@@ -195,6 +188,40 @@ struct ContentView: View {
+         }
+     }
+ 
++    // macOS 26 only: toolbar spacers and the hidden shared background. Older systems get the plain toolbar.
++    @ToolbarContentBuilder private var fixedToolbarSpacer: some ToolbarContent {
++        #if compiler(>=6.2)
++        if #available(macOS 26, *) { ToolbarSpacer(.fixed, placement: .navigation) }
++        #endif
++    }
++
++    @ToolbarContentBuilder private var flexibleToolbarSpacer: some ToolbarContent {
++        #if compiler(>=6.2)
++        if #available(macOS 26, *) { ToolbarSpacer(.flexible, placement: .navigation) }
++        #endif
++    }
++
++    @ToolbarContentBuilder private func tabStripToolbarItem(_ workspace: ProjectWorkspace) -> some ToolbarContent {
++        #if compiler(>=6.2)
++        if #available(macOS 26, *) {
++            ToolbarItem(placement: .navigation) { tabStrip(workspace) }
++                .sharedBackgroundVisibility(.hidden)
++        } else {
++            ToolbarItem(placement: .navigation) { tabStrip(workspace) }
++        }
++        #else
++        ToolbarItem(placement: .navigation) { tabStrip(workspace) }
++        #endif
++    }
++
++    private func tabStrip(_ workspace: ProjectWorkspace) -> some View {
++        ProjectTabStrip(workspace: workspace)
++            // As wide as the toolbar allows: the window less the traffic lights and New button before it
++            // and the zoom controls after it. Bounded, so adding tabs never pushes those aside; the
++            // strip scrolls instead.
++            .frame(width: max(200, windowWidth - 352), height: 34, alignment: .center)
++    }
++
+     var body: some View {
+         editorChrome
+         .onChange(of: session.levels == nil) { _, closed in
+@@ -342,7 +369,7 @@ private struct PanelResizeEdge: View {
+     var body: some View {
+         Divider().overlay {
+             Color.clear.frame(width: 8).contentShape(Rectangle())
+-                .pointerStyle(.columnResize)
++                .columnResizePointer()
+                 .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                     .onChanged { value in
+                         let start = startWidth ?? width
+@@ -453,3 +480,10 @@ private struct WidthReader: ViewModifier {
+         content.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+     }
+ }
++
++extension View {
++    /// The column-resize pointer where the system has it (macOS 15); a no-op on macOS 14.
++    @ViewBuilder func columnResizePointer() -> some View {
++        if #available(macOS 15, *) { pointerStyle(.columnResize) } else { self }
++    }
++}

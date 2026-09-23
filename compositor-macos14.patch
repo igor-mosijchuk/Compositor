@@ -1,35 +1,21 @@
 diff --git a/Compositor/CompositorApp.swift b/Compositor/CompositorApp.swift
-index 03dad68..c6aeee4 100644
+index 03dad68..1624701 100644
 --- a/Compositor/CompositorApp.swift
 +++ b/Compositor/CompositorApp.swift
-@@ -15,9 +15,7 @@ struct CompositorApp: App {
+@@ -13,11 +13,8 @@ struct CompositorApp: App {
+             // Files opened from Finder or dropped on the Dock icon go to the app delegate, which imports them into
+             // the open window. Left to SwiftUI, each one builds a throwaway window and fades the editor out and back.
              .handlesExternalEvents(matching: [])
-             // A first launch fills the screen (without going full screen); after that macOS reopens the window at the
-             // size it was left.
+-            // A first launch fills the screen (without going full screen); after that macOS reopens the window at the
+-            // size it was left.
 -            .defaultWindowPlacement { _, context in
 -                WindowPlacement(size: context.defaultDisplay.visibleRect.size)
 -            }
-+            .fillsScreenOnFirstLaunch()
++            // (Removed for macOS 14 support: `defaultWindowPlacement` needs macOS 15, so the window opens at the
++            // default size above instead of filling the screen on first launch.)
              // The project's name is already on its tab, so the toolbar doesn't repeat it as a window title.
              .windowToolbarStyle(.unifiedCompact(showsTitle: false))
              .commands {
-@@ -320,3 +318,16 @@ struct CompositorApp: App {
-             }
-     }
- }
-+
-+private extension Scene {
-+    /// macOS 15+: open the first window at the visible screen size. On macOS 14 the default size applies instead.
-+    @SceneBuilder func fillsScreenOnFirstLaunch() -> some Scene {
-+        if #available(macOS 15, *) {
-+            defaultWindowPlacement { _, context in
-+                WindowPlacement(size: context.defaultDisplay.visibleRect.size)
-+            }
-+        } else {
-+            self
-+        }
-+    }
-+}
 diff --git a/Compositor/ContentView.swift b/Compositor/ContentView.swift
 index 9cfba1c..94fe346 100644
 --- a/Compositor/ContentView.swift
@@ -191,3 +177,29 @@ index d352d75..34ccbc5 100644
          let positions: [NSCursor.FrameResizePosition] = [.right, .bottomRight, .bottom, .topRight]
          return .frameResize(position: positions[direction], directions: [.inward, .outward])
      }
+diff --git a/Compositor/UI/BlendModePicker.swift b/Compositor/UI/BlendModePicker.swift
+index cf2448f..8e354a8 100644
+--- a/Compositor/UI/BlendModePicker.swift
++++ b/Compositor/UI/BlendModePicker.swift
+@@ -17,7 +17,7 @@ struct BlendModePicker: NSViewRepresentable {
+         button.action = #selector(Coordinator.choose(_:))
+         button.setAccessibilityLabel("Blend mode")
+         // A capsule like the SwiftUI buttons and menus (`roundedControls`), which don't reach this AppKit pop-up.
+-        button.borderShape = .capsule
++        if #available(macOS 26, *) { button.borderShape = .capsule }
+         return button
+     }
+     func updateNSView(_ button: NSPopUpButton, context: Context) {
+diff --git a/Compositor/UI/TypeControls.swift b/Compositor/UI/TypeControls.swift
+index 9bbcaea..6f2d2af 100644
+--- a/Compositor/UI/TypeControls.swift
++++ b/Compositor/UI/TypeControls.swift
+@@ -93,7 +93,7 @@ private struct TypeFontPicker: NSViewRepresentable {
+     func makeNSView(context: Context) -> NSPopUpButton {
+         let button = FixedWidthPopUpButton(frame: .zero, pullsDown: false)
+         button.addItem(withTitle: fontName)
+-        button.borderShape = .capsule
++        if #available(macOS 26, *) { button.borderShape = .capsule }
+         // A long font name is cut off at its end rather than widening the control or scrolling its start away.
+         button.cell?.lineBreakMode = .byTruncatingTail
+         button.cell?.usesSingleLineMode = true

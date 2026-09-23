@@ -27,7 +27,10 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log || {
               echo "=== ERRORS ==="
-              grep -E "error:" build.log | sed 's#/Users/runner/work/Compositor/Compositor/##' | sort -u | head -30 | tee errors.txt
+              grep -niE "error|failed|stack dump|please submit|segmentation|crash|unavailable|cannot |unable to" build.log \
+                | sed 's#/Users/runner/work/Compositor/Compositor/##' | cut -c1-300 | awk '!seen[$0]++' | head -40 | tee errors.txt
+              echo "=== LAST 40 LINES ==="
+              tail -40 build.log | cut -c1-300 | tee tail.txt
               while IFS= read -r line; do echo "::error::$line"; done < errors.txt
               exit 1
             }

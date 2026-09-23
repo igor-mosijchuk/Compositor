@@ -1,42 +1,79 @@
-name: Build DMG
+name: Verify
 
 on:
-  workflow_dispatch:
+  push:
+  pull_request:
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: macos-26   # образ з Xcode 26; збирає застосунок під macOS 14.0+
+  unit:
+    name: unit
+    # Push covers same-repo branches. pull_request runs only for forks, so a PR is not tested twice.
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: macos-26
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Apply macOS 14 patch
-        run: git apply compositor-macos14.patch
+      - name: Select Xcode 26.6
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
 
-      - name: Xcode version
-        run: xcodebuild -version
+      - name: Resolve Swift packages
+        run: >
+          xcodebuild -resolvePackageDependencies
+          -project Compositor.xcodeproj
+          -scheme Compositor
+          -onlyUsePackageVersionsFromResolvedFile
 
-      - name: Build (universal, unsigned)
-        run: |
-          xcodebuild -project Compositor.xcodeproj \
-            -scheme Compositor \
-            -configuration Release \
-            -derivedDataPath build \
-            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
-            MACOSX_DEPLOYMENT_TARGET=14.0 \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
-            build
+      - name: Build for testing
+        id: build
+        run: >
+          xcodebuild build-for-testing
+          -project Compositor.xcodeproj
+          -scheme Compositor
+          -destination 'platform=macOS'
+          -configuration Debug
+          -derivedDataPath DerivedData
+          CODE_SIGN_IDENTITY=-
 
-      - name: Ad-hoc sign and package DMG
-        run: |
-          APP=$(find build/Build/Products/Release -maxdepth 1 -name "*.app" | head -1)
-          echo "Built: $APP"
-          codesign --force --deep --sign - "$APP"
-          mkdir dmgroot
-          cp -R "$APP" dmgroot/
-          ln -s /Applications dmgroot/Applications
-          hdiutil create -volname "Compositor" -srcfolder dmgroot -ov -format UDZO Compositor-macos14.dmg
+      # These two suites show real windows and time them, so they run alone after the rest.
+      - name: Run unit tests in parallel
+        run: >
+          xcodebuild test-without-building
+          -project Compositor.xcodeproj
+          -scheme Compositor
+          -destination 'platform=macOS'
+          -derivedDataPath DerivedData
+          -resultBundlePath ParallelResults.xcresult
+          -parallel-testing-enabled YES
+          -skip-testing:CompositorTests/FloatingPanelTests
+          -skip-testing:CompositorTests/SliderSnapTests
 
-      - uses: actions/upload-artifact@v4
+      - name: Run window tests serially
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: >
+          xcodebuild test-without-building
+          -project Compositor.xcodeproj
+          -scheme Compositor
+          -destination 'platform=macOS'
+          -derivedDataPath DerivedData
+          -resultBundlePath SerialResults.xcresult
+          -parallel-testing-enabled NO
+          -only-testing:CompositorTests/FloatingPanelTests
+          -only-testing:CompositorTests/SliderSnapTests
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v7
         with:
-          name: Compositor-dmg
-          path: Compositor-macos14.dmg
+          name: unit-test-results
+          path: '*.xcresult'
+          retention-days: 7
+          if-no-files-found: ignore

@@ -5,54 +5,56 @@ on:
 
 jobs:
   build:
-    runs-on: macos-26   # образ з Xcode 26; збирає застосунок під macOS 14.0+
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
       - name: Apply macOS 14 patch
         run: git apply compositor-macos14.patch
 
-      - name: Xcode version
-        run: xcodebuild -version
-
-      - name: Build (universal, unsigned)
+      - name: Build (tries 14.0, then 15.0, then 15.4)
         run: |
-          set -o pipefail
-          xcodebuild -project Compositor.xcodeproj \
-            -scheme Compositor \
-            -configuration Release \
-            -derivedDataPath build \
-            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
-            MACOSX_DEPLOYMENT_TARGET=14.0 \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee build.log || {
-              echo "=== ERRORS ==="
-              grep -niE "error|failed|stack dump|please submit|segmentation|crash|unavailable|cannot |unable to" build.log \
-                | sed 's#/Users/runner/work/Compositor/Compositor/##' | cut -c1-300 | awk '!seen[$0]++' | head -40 | tee errors.txt
-              echo "=== LAST 40 LINES ==="
-              tail -40 build.log | cut -c1-300 | tee tail.txt
-              while IFS= read -r line; do echo "::error::$line"; done < errors.txt
-              exit 1
-            }
+          for T in 14.0 15.0 15.4; do
+            echo "=================== Trying deployment target $T ==================="
+            rm -rf build
+            if xcodebuild -project Compositor.xcodeproj \
+                 -scheme Compositor \
+                 -configuration Release \
+                 -derivedDataPath build \
+                 ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
+                 MACOSX_DEPLOYMENT_TARGET=$T \
+                 CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" \
+                 build > build-$T.log 2>&1; then
+              echo "SUCCESS with $T"
+              echo "$T" > target.txt
+              break
+            else
+              echo "FAILED with $T. Key lines:"
+              grep -E "error:|While running pass|While evaluating|Stack dump" build-$T.log | sed 's#/Users/runner/work/Compositor/Compositor/##' | cut -c1-250 | awk '!seen[$0]++' | head -15 | tee -a errors.txt
+              while IFS= read -r line; do echo "::error::[$T] $line"; done < <(grep -E "error:|While running pass" build-$T.log | sed 's#/Users/runner/work/Compositor/Compositor/##' | cut -c1-250 | awk '!seen[$0]++' | head -5)
+            fi
+          done
+          test -f target.txt
 
-      - name: Upload build log
+      - name: Upload build logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: build.log
+          name: build-logs
+          path: build-*.log
 
       - name: Ad-hoc sign and package DMG
         run: |
+          T=$(cat target.txt)
           APP=$(find build/Build/Products/Release -maxdepth 1 -name "*.app" | head -1)
-          echo "Built: $APP"
+          echo "Built: $APP for macOS $T+"
           codesign --force --deep --sign - "$APP"
           mkdir dmgroot
           cp -R "$APP" dmgroot/
           ln -s /Applications dmgroot/Applications
-          hdiutil create -volname "Compositor" -srcfolder dmgroot -ov -format UDZO Compositor-macos14.dmg
+          hdiutil create -volname "Compositor" -srcfolder dmgroot -ov -format UDZO "Compositor-macos$T-plus.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: Compositor-dmg
-          path: Compositor-macos14.dmg
+          path: Compositor-macos*-plus.dmg
